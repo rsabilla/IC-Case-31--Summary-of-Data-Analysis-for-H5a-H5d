@@ -1,0 +1,354 @@
+---
+title: "IC M08: Case 31 Summary of Data Analysis"
+subtitle: "H5a–H5d: Drivers of the Overall Rating | Employees Federal Credit Union (EFCU)"
+author: "Ron Sabilla"
+date: today
+format:
+  html:
+    toc: true
+    toc-depth: 3
+    toc-location: left
+    toc-expand: 2
+    number-sections: true
+    theme: cosmo
+    embed-resources: true
+    code-fold: true
+    code-summary: "Show code"
+    code-tools: true
+execute:
+  warning: false
+  message: false
+---
+
+# Introduction
+
+EFCU has plenty of savings but not enough loans: members save at the credit union (CU) and borrow somewhere else. In the R6 analysis, members rated the CU's management positively overall, but the loan-related items scored lower. This report asks the next question: **which parts of the CU's operations actually drive members' overall rating?**
+
+## Hypotheses
+
+All four hypotheses share the same dependent variable, the **overall rating of how the CU is managed and operated (q37r)**:
+
+| Hypothesis | Independent variable | Variable | Expected effect on overall rating |
+|----|----|----|----|
+| **H5a** | Belief that the CU keeps personal financial information confidential | q31 | Positive |
+| **H5b** | Promptness in processing loan applications | q32 | Positive |
+| **H5c** | Financial services meet members' needs | q33 | Positive |
+| **H5d** | Loan applications are simple and easy | q34 | Positive |
+
+: Hypotheses H5a–H5d {#tbl-hyp}
+
+## Why Multiple Regression?
+
+-   **One interval DV:** q37r is a 1–5 rating (1 = Very Poor, 5 = Excellent), treated as approximately interval.
+-   **Several interval IVs:** q31–q34 are 1–5 agreement items (1 = Strongly Disagree, 5 = Strongly Agree), also treated as approximately interval.
+-   **We want each IV's unique effect.** The four items are related to one another (for example, prompt processing and simple applications both describe the loan experience). Running four separate correlations or simple regressions would let them take credit for each other. One multiple regression estimates the effect of each item **while holding the other three constant**, which tests H5a–H5d in a single model.
+
+::: callout-note
+## A note on the R6 reliability results
+
+In the earlier reliability analysis, q31–q34 didn't form a reliable scale (α = .47), so they were never combined. That's not a problem here, and it actually fits the regression: each item is a separate predictor, and the low correlations between them mean multicollinearity won't be an issue (checked in @sec-assumptions).
+:::
+
+## Setup
+
+```{r}
+#| label: setup
+#| code-fold: show
+
+library(haven)
+library(dplyr)
+library(tidyr)
+library(ggplot2)
+library(knitr)
+library(broom)
+library(car)   # vif(), ncvTest(), hccm()
+
+theme_set(theme_minimal(base_size = 13))
+blue <- "#2C6E91"
+
+efcu <- read_sav("case31_efcu_4.sav") |> zap_labels()
+
+var_labels <- c(
+  Q37_r = "Overall rating of management (q37r)",
+  q31 = "H5a: Keeps financial info confidential (q31)",
+  q32 = "H5b: Prompt loan processing (q32)",
+  q33 = "H5c: Services meet members' needs (q33)",
+  q34 = "H5d: Loan applications simple and easy (q34)"
+)
+
+# Complete cases for the model (q37r has 7 "No answer" responses set to missing)
+h5 <- efcu |> select(all_of(names(var_labels))) |> drop_na()
+
+fmt_p <- \(p) if_else(p < .001, "< .001", sub("^0", "", sprintf("%.3f", p)))
+f2    <- \(x) sprintf("%.2f", x)
+p_eq  <- \(p) if (p < .001) "*p* < .001" else paste0("*p* = ", fmt_p(p))
+```
+
+The regression uses **`r nrow(h5)` members** with complete answers. The other `r nrow(efcu) - nrow(h5)` members chose "No answer" on the overall rating (q37r), so they're left out.
+
+# Descriptive Statistics
+
+## Means and Standard Deviations
+
+```{r}
+#| label: tbl-desc
+#| tbl-cap: "Descriptive statistics for the DV and the four IVs (n = complete cases)"
+
+h5 |>
+  pivot_longer(everything(), names_to = "var") |>
+  summarise(
+    n = n(), mean = mean(value), sd = sd(value),
+    `% favorable (4 or 5)` = mean(value >= 4) * 100,
+    .by = var
+  ) |>
+  mutate(var = var_labels[var]) |>
+  kable(digits = 2, col.names = c("Variable", "n", "Mean", "SD", "% favorable (4 or 5)"))
+```
+
+## Correlations
+
+```{r}
+#| label: tbl-cor
+#| tbl-cap: "Pearson correlations between the overall rating and the four operations items"
+
+cor_mat <- cor(h5)
+cor_labels <- c("q37r", "q31", "q32", "q33", "q34")
+dimnames(cor_mat) <- list(cor_labels, cor_labels)
+cor_mat[upper.tri(cor_mat)] <- NA
+
+cor_mat |> kable(digits = 2)
+```
+
+```{r}
+#| label: fig-cor
+#| fig-cap: "Correlation of each operations item with the overall rating"
+#| fig-height: 3.5
+#| fig-width: 8
+
+cor_dv <- sapply(names(var_labels)[-1], \(v) cor(h5$Q37_r, h5[[v]]))
+
+tibble(item = var_labels[names(cor_dv)], r = cor_dv) |>
+  ggplot(aes(x = r, y = reorder(item, r))) +
+  geom_col(fill = blue, width = 0.6) +
+  geom_text(aes(label = f2(r)), hjust = -0.2) +
+  scale_x_continuous(limits = c(0, 0.55)) +
+  labs(x = "Correlation with overall rating (r)", y = NULL)
+```
+
+```{r}
+#| label: desc-inline
+#| include: false
+
+r_val <- \(v) f2(cor(h5$Q37_r, h5[[v]]))
+```
+
+**What the descriptives suggest:** before running the regression, the correlations already point to a story. Prompt loan processing (*r* = `r r_val("q32")`), meeting members' needs (*r* = `r r_val("q33")`), and confidentiality (*r* = `r r_val("q31")`) all move with the overall rating. Simple loan applications barely relate to it (*r* = `r r_val("q34")`), even though it's the item members rate lowest (@tbl-desc, @fig-cor). The regression tests whether this pattern holds when all four items are considered together.
+
+# Multiple Regression: H5a–H5d
+
+**Model:** q37r = β₀ + β₁(q31) + β₂(q32) + β₃(q33) + β₄(q34) + ε
+
+For each hypothesis, **H₀:** β = 0 and **Hₐ:** β > 0 (a positive effect).
+
+```{r}
+#| label: h5-model
+
+h5_model <- lm(Q37_r ~ q31 + q32 + q33 + q34, data = h5)
+summary(h5_model)
+```
+
+## Overall Model Fit
+
+```{r}
+#| label: tbl-fit
+#| tbl-cap: "Overall model fit"
+
+fit <- glance(h5_model)
+
+fit |>
+  transmute(
+    `R²` = r.squared, `Adjusted R²` = adj.r.squared,
+    F = statistic, `df (model, residual)` = paste(df, df.residual, sep = ", "),
+    p = fmt_p(p.value), n = nobs
+  ) |>
+  kable(digits = 3)
+```
+
+## Coefficients
+
+```{r}
+#| label: tbl-coef
+#| tbl-cap: "Regression coefficients: unstandardized (b) and standardized (β), with one-tailed p-values for the directional hypotheses"
+
+# Standardized coefficients: refit the model on z-scores
+h5_z <- h5 |> mutate(across(everything(), \(x) as.numeric(scale(x))))
+beta <- coef(lm(Q37_r ~ q31 + q32 + q33 + q34, data = h5_z))
+
+coef_tbl <- tidy(h5_model, conf.int = TRUE) |>
+  filter(term != "(Intercept)") |>
+  mutate(
+    beta = beta[term],
+    # Hypotheses are directional (positive), so one-tailed p = two-tailed p / 2 when b > 0
+    p_one = if_else(estimate > 0, p.value / 2, 1 - p.value / 2),
+    supported = if_else(estimate > 0 & p_one < .05, "Supported", "Not supported"),
+    hypothesis = c("H5a", "H5b", "H5c", "H5d"),
+    item = var_labels[term]
+  )
+
+coef_tbl |>
+  transmute(
+    Hypothesis = hypothesis, Predictor = item,
+    b = estimate, SE = std.error, `β` = beta, t = statistic,
+    `p (two-tailed)` = fmt_p(p.value), `p (one-tailed)` = fmt_p(p_one),
+    Result = supported
+  ) |>
+  kable(digits = 2)
+```
+
+```{r}
+#| label: fig-coef
+#| fig-cap: "Standardized coefficients (β) for each driver of the overall rating; bars in blue are significant at p < .05"
+#| fig-height: 3.5
+#| fig-width: 8
+
+coef_tbl |>
+  mutate(sig = if_else(supported == "Supported", "Significant", "Not significant")) |>
+  ggplot(aes(x = beta, y = reorder(item, beta), fill = sig)) +
+  geom_col(width = 0.6) +
+  geom_vline(xintercept = 0, color = "gray40") +
+  geom_text(aes(label = f2(beta), hjust = if_else(beta > 0, -0.2, 1.2))) +
+  scale_fill_manual(values = c("Significant" = blue, "Not significant" = "gray75")) +
+  scale_x_continuous(limits = c(-0.15, 0.45)) +
+  labs(x = "Standardized coefficient (β)", y = NULL, fill = NULL) +
+  theme(legend.position = "top")
+```
+
+## Checking the Assumptions {#sec-assumptions}
+
+::: panel-tabset
+### Multicollinearity
+
+```{r}
+#| label: tbl-vif
+#| tbl-cap: "Variance inflation factors (VIF)"
+
+tibble(Predictor = var_labels[names(vif(h5_model))], VIF = vif(h5_model)) |>
+  kable(digits = 2)
+```
+
+All VIFs are close to 1 (well under the common cutoff of 5), so the predictors aren't overlapping enough to distort the coefficients.
+
+### Residual plots
+
+```{r}
+#| label: fig-resid
+#| fig-cap: "Regression diagnostics: residuals vs. fitted values and normal Q-Q plot"
+#| fig-height: 4
+#| fig-width: 9
+
+par(mfrow = c(1, 2))
+plot(h5_model, which = 1:2)
+par(mfrow = c(1, 1))
+```
+
+### Normality and equal variance
+
+```{r}
+#| label: assumption-tests
+
+shapiro.test(resid(h5_model))
+ncvTest(h5_model)
+```
+
+### Robust standard errors
+
+Because the tests above flag some non-normality and unequal variance, I re-ran the coefficient tests with heteroskedasticity-robust (HC3) standard errors as a check.
+
+```{r}
+#| label: tbl-robust
+#| tbl-cap: "Coefficient tests with robust (HC3) standard errors"
+
+robust_se <- sqrt(diag(hccm(h5_model, type = "hc3")))
+
+tibble(
+  term = names(coef(h5_model)),
+  b = coef(h5_model),
+  `Robust SE` = robust_se,
+  t = b / `Robust SE`,
+  p = 2 * pt(abs(t), df = df.residual(h5_model), lower.tail = FALSE)
+) |>
+  filter(term != "(Intercept)") |>
+  mutate(term = var_labels[term], p = fmt_p(p)) |>
+  rename(Predictor = term) |>
+  kable(digits = 2)
+```
+:::
+
+```{r}
+#| label: assumption-inline
+#| include: false
+
+sw <- shapiro.test(resid(h5_model))
+nv <- ncvTest(h5_model)
+robust_p <- 2 * pt(abs(coef(h5_model) / robust_se), df.residual(h5_model), lower.tail = FALSE)
+```
+
+**Assumption summary:** multicollinearity isn't a concern (all VIFs ≤ `r f2(max(vif(h5_model)))`). The residuals are somewhat non-normal (Shapiro-Wilk `r p_eq(sw$p.value)`), and their spread changes a little across fitted values (Breusch-Pagan `r p_eq(nv$p)`). That's common with 5-point rating scales, where most answers pile up at 4. With `r nrow(h5)` cases, the regression is fairly robust to mild non-normality, and the robust standard errors in @tbl-robust lead to the same conclusions, so the results below hold up.
+
+# Insights
+
+```{r}
+#| label: h5-inline
+#| include: false
+
+get <- \(h) coef_tbl |> filter(hypothesis == h)
+a <- get("H5a"); b <- get("H5b"); c <- get("H5c"); d <- get("H5d")
+```
+
+**Together, the four operations items explain about `r round(fit$r.squared * 100)`% of the variation in how members rate the CU overall** (*R*² = `r f2(fit$r.squared)`, *F*(`r fit$df`, `r fit$df.residual`) = `r f2(fit$statistic)`, *p* < .001; @tbl-fit). Three of the four have a clear, positive effect, and one doesn't (@tbl-coef, @fig-coef).
+
+## H5b: Prompt Loan Processing (Supported)
+
+**Promptness is the biggest driver of the overall rating.** Holding the other items constant, every one-point increase in agreement that loans are processed promptly raises the overall rating by about `r f2(b$estimate)` points (*β* = `r f2(b$beta)`, *t* = `r f2(b$statistic)`, *p* < .001). Members judge the whole CU partly by how fast it handles their loan requests.
+
+## H5c: Services Meet Members' Needs (Supported)
+
+**Meeting members' needs is a close second.** Members who feel the CU's services fit their needs give it a higher overall rating (*b* = `r f2(c$estimate)`, *β* = `r f2(c$beta)`, *t* = `r f2(c$statistic)`, *p* < .001).
+
+## H5a: Confidentiality (Supported)
+
+**Trust matters too, though less.** Members who believe the CU keeps their financial information confidential rate it higher overall (*b* = `r f2(a$estimate)`, *β* = `r f2(a$beta)`, *t* = `r f2(a$statistic)`, one-tailed *p* = `r fmt_p(a$p_one)`). Its effect is the smallest of the three significant drivers, likely because confidentiality is already rated highly by most members, so there's less room for it to separate a good rating from a great one.
+
+## H5d: Simple and Easy Loan Applications (Not Supported)
+
+**Simple applications don't drive the overall rating.** Once the other three items are accounted for, application simplicity has no effect, and its coefficient is even slightly negative (*b* = `r f2(d$estimate)`, *t* = `r f2(d$statistic)`, *p* = `r fmt_p(d$p.value)`). It barely correlates with the overall rating on its own (*r* = `r r_val("q34")`; @tbl-cor). Its strongest link is with **promptness** (*r* = `r f2(cor(h5$q32, h5$q34))`), so what members care about seems to be how fast the loan comes through, not how easy the form is to fill out.
+
+## What It Means for EFCU
+
+-   **Speed up loan processing first.** It has the biggest effect on how members see the whole CU, and only about 6 in 10 members currently agree that loans are processed promptly (R6). Faster approvals improve both the loan experience and the CU's overall image.
+-   **Make the services fit members' needs.** This is the second-strongest driver and was one of the weaker R6 items. Talking with members about the products they actually want (and promoting the right loans) can raise the overall rating.
+-   **Protect the trust EFCU already has.** Confidentiality is a strength; keep it visible in communications.
+-   **Don't lead with "easy applications."** Simplifying the form is still nice to have, but this data says it won't move members' overall opinion much. Marketing messages should promise **fast decisions** rather than easy paperwork.
+
+# Summary of Findings
+
+| Hypothesis | Predictor | β | Result |
+|----|----|----|----|
+| **H5a** | Confidentiality (q31) | `r f2(a$beta)` | Supported |
+| **H5b** | Prompt loan processing (q32) | `r f2(b$beta)` | Supported (strongest driver) |
+| **H5c** | Services meet needs (q33) | `r f2(c$beta)` | Supported |
+| **H5d** | Simple loan applications (q34) | `r f2(d$beta)` | Not supported |
+
+: Summary of results for H5a–H5d (model *R*² = `r f2(fit$r.squared)`) {#tbl-summary}
+
+## Limitations
+
+-   About `r round((1 - fit$r.squared) * 100)`% of the variation in the overall rating comes from things the model doesn't include (for example, rates, employee proficiency, or convenience).
+-   All variables are 5-point Likert-type items treated as approximately interval, and most answers cluster at 3–4, which limits variation.
+-   The data is cross-sectional, so the results show which items go together with a higher rating, not proof that changing one item will raise it.
+-   Seven members who gave no overall rating are excluded, leaving `r nrow(h5)` cases.
+
+# Appendix
+
+-   **GitHub Repo:** <https://github.com/rsabilla/IC-Case-31--Summary-of-Data-Analysis-for-H5a-H5d>
+-   **GitHub Pages:** <https://rsabilla.github.io/IC-Case-31--Summary-of-Data-Analysis-for-H5a-H5d/>
