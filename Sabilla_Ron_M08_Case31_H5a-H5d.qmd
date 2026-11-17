@@ -350,5 +350,5 @@ a <- get("H5a"); b <- get("H5b"); c <- get("H5c"); d <- get("H5d")
 
 # Appendix
 
--   **GitHub Repo:** <https://github.com/rsabilla/IC-Case-31--Summary-of-Data-Analysis-for-H5a-H5d>
+-   **GitHub Repo:** <https://github.com/rsabilla/IC-Case-31--Summary-of-Data-Analysis-for-H5a-H5d.git>
 -   **GitHub Pages:** <https://rsabilla.github.io/IC-Case-31--Summary-of-Data-Analysis-for-H5a-H5d/>
